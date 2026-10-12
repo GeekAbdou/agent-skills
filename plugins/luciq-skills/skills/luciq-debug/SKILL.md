@@ -29,7 +29,7 @@ The MCP exposes (verbatim names):
 | `crash_patterns` | Distribution by `pattern_key` (e.g. `oses`, `app_versions`, `devices`). |
 | `list_occurrences_tokens` | Occurrence ULIDs for a crash group, paginated. |
 | `get_occurrence_details` | Per-occurrence detail: session profiler, logs URLs, device state. |
-| `list_crashes` with `filters.type: ["APP_HANG"]` | Hang and ANR groups. iOS surface as `FATAL_UI_HANG`, Android as `ANDROID_FATAL_HANG`. |
+| `list_crashes` with `filters.type: ["APP_HANG"]` | App hang groups. iOS surface as `FATAL_UI_HANG`, Android as `ANDROID_FATAL_HANG`. ANRs are the separate `ANR` type; add it to the same call to get both. |
 | `list_bugs` | User-reported bugs. |
 | `bug_details` | Full bug detail including compressed log archive URLs. |
 | `list_reviews` | App Store / Play Store reviews filtered by `rating` and `app_version`. |
@@ -65,7 +65,7 @@ Determine the kind of signal being debugged. If the user has not specified, ask.
 | --- | --- | --- |
 | Crash group | Crash number, fingerprint, or pasted stack trace | `crash_details` (or `list_crashes` to find it first) |
 | Specific occurrence of a crash | Crash number plus ULID | `get_occurrence_details` |
-| App hang or ANR | Hang number, or "recent UI hangs" | `list_crashes` with `filters.type: ["APP_HANG"]` (then the crash tools on its number) |
+| App hang or ANR | Hang number, or "recent UI hangs" | `list_crashes` with `filters.type: ["APP_HANG", "ANR"]` (then the crash tools on its number) |
 | User-reported bug | Bug number | `bug_details` |
 | Regression between versions | Two version numbers | `list_crashes` filtered by version, then `crash_patterns` with `pattern_key: app_versions` |
 | Review or rating signal | Date range and version | `list_reviews` filtered by `rating` and `app_version` |
@@ -161,12 +161,12 @@ When the top frame involves `async`, `await`, an actor, or a `Sendable` violatio
 - Look at the session profiler from `get_occurrence_details` for hop-to-`@MainActor` patterns near the crash time.
 - Do not recommend slapping `@MainActor` on a class to silence the error. Treat that as a smell, not a fix.
 
-### Android ANRs (`ANDROID_FATAL_HANG`)
+### Android hangs and ANRs (`ANDROID_FATAL_HANG`, `ANR`)
 
-When `list_crashes` returns an Android hang:
+When `list_crashes` returns an Android hang or ANR:
 
 - The `crash_cause` field tells you where the main thread was blocked, but not always what blocked it. Pull a few `get_occurrence_details` to see recent main-thread activity and pending I/O.
-- Check `pattern_key: app_versions` to see whether the ANR is a regression or a long-tail issue.
+- Check `pattern_key: app_versions` to see whether it is a regression or a long-tail issue.
 - Common offenders: synchronous network calls on the main thread, large `SharedPreferences.commit()` writes, blocking `Lock` acquisitions, work scheduled on the wrong dispatcher.
 
 ### iOS UI hangs (`FATAL_UI_HANG`)

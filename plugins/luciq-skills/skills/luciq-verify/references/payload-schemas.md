@@ -43,7 +43,7 @@ Verified against the live Luciq MCP server API. Tool names below are exact.
 | `crash_details` | Group-level metadata and a sample occurrence. |
 | `crash_patterns` | Distribution by `pattern_key` (default `app_versions`). Primary for SDK-version regression diffing. |
 | `get_occurrence_details` | Per-occurrence payload — crash-channel evidence. |
-| `list_crashes` with `filters.type: ["APP_HANG"]` | iOS UI hangs and Android ANRs (iOS has no `ANR` crash type; ANR is Android-only). |
+| `list_crashes` with `filters.type: ["APP_HANG"]` | iOS UI hangs (`FATAL_UI_HANG`) and Android app hangs (`ANDROID_FATAL_HANG`). Android ANRs are the separate `ANR` type (iOS has no `ANR` crash type). |
 
 ### Bug path
 
