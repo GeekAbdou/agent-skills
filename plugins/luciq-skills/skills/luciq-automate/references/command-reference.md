@@ -46,17 +46,16 @@ luciq apps list --limit 50 | jq -r '.applications[] | "\(.slug)\t\(.mode)\t\(.pl
 
 | Subcommand | Flags |
 | --- | --- |
-| `list` | `--status open\|closed\|in_progress`, `--platform IOS\|ANDROID\|DART\|JAVASCRIPT`, `--type CRASH\|ANR\|OOM\|NON_FATAL`, `--app-version`, page, sort |
+| `list` | `--status open\|closed\|in_progress`, `--platform IOS\|ANDROID\|DART\|JAVASCRIPT`, `--type CRASH\|ANR\|OOM\|NON_FATAL\|APP_HANG`, `--app-version`, page, sort |
 | `show` | `--number N` (required) |
 | `patterns` | `--number N` (required), `--pattern-key app_versions\|devices\|oses\|current_views\|app_status\|experiments`, `--sort-by occurrences_count\|last_seen\|first_seen`, `--direction` |
 | `diagnostics` | `--number N` (required) |
-| `hangs` | `--status`, `--platform`, `--app-version`, page, sort |
 | `occurrence-tokens` | `--number N` (required), `--current-token`, `--direction first\|last` |
 | `occurrence` | `--number N`, `--ulid U` (both required) |
 
-Sort fields for `list` / `hangs`: `last_occurred_at`, `first_occurred_at`, `occurrences_counter`, `affected_users_counter`, `max_app_version`, `min_app_version`, `severity`.
+Sort fields for `list`: `last_occurred_at`, `first_occurred_at`, `occurrences_counter`, `affected_users_counter`, `max_app_version`, `min_app_version`, `severity`.
 
-`--filters` keys — `list` / `hangs`:
+`--filters` keys — `list`:
 
 ```
 date_ms        {"gte": <ms>, "lte": <ms>}
@@ -67,9 +66,9 @@ devices        ["iPhone15,2"]
 os_versions    ["17.4"]
 platform       ["IOS","ANDROID","DART","JAVASCRIPT"]
 current_views  ["<screen-name>"]
-type           ["CRASH","ANR","OOM","NON_FATAL"]        (list only)
-subtype        ["CRITICAL","ERROR","WARNING","INFO"]    (list only; needs NON_FATAL in type)
-feature_flags  ["<flag>" | "<flag> -> <variant>"]       (list only)
+type           ["CRASH","ANR","OOM","NON_FATAL","APP_HANG"]
+subtype        ["CRITICAL","ERROR","WARNING","INFO"]    (needs NON_FATAL in type)
+feature_flags  ["<flag>" | "<flag> -> <variant>"]
 ```
 
 `patterns`: `date_ms`, `app_versions`, `devices`, `os_versions`.
@@ -81,7 +80,7 @@ luciq crashes show --slug my-app --mode production --number 42
 luciq crashes patterns --slug my-app --mode production --number 42 --pattern-key devices
 ```
 
-`list` and `hangs` both return `{"crashes": [...]}`; `show` / `patterns` / `diagnostics` / `occurrence` return a JSON object.
+`list` returns `{"crashes": [...]}`; `show` / `patterns` / `diagnostics` / `occurrence` return a JSON object.
 
 `diagnostics` may answer `status: "generating"` with a `retry_after_seconds` — re-run the same command after that delay rather than treating it as an error.
 
@@ -266,7 +265,7 @@ Verified against live data. The JSON is enveloped, so `jq` filters key off the e
 | Command | Shape |
 | --- | --- |
 | `apps list` | `{"applications": [...]}` — **contains app tokens** |
-| `crashes list`, `crashes hangs` | `{"crashes": [...]}` |
+| `crashes list` | `{"crashes": [...]}` |
 | `bugs list` | `{"bugs": [...]}` |
 | `reviews list` | `{"reviews": [...]}` |
 | `surveys list` | `{"surveys": [...]}` |
