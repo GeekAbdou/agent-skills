@@ -44,6 +44,8 @@ brew install luciqai/tap/luciq-cli   # macOS / Linux
 gem install luciq-cli                # Ruby >= 2.7
 ```
 
+**Two tools install a `luciq` command.** This skill drives the Ruby `luciq-cli` (brew / gem above). The Flutter SDK also publishes a Dart `luciq_cli` (`dart pub global activate luciq_cli`) whose `luciq` runs `migrate`, `upload-symbols` and `upload-so-files` with an app token and API key. When its `~/.pub-cache/bin` comes first on `PATH`, every command here fails. It prints a `🦋 Luciq CLI` banner, then `No applicable command found` or `Unknown command`. Run `which -a luciq`, then put the brew/gem path first, or call that binary by its full path. Never mix the two tools' flags.
+
 **One credential for everything.** The CLI token is generated at [dashboard.luciq.ai/company/luciq-cli](https://dashboard.luciq.ai/company/luciq-cli) → *Generate authentication token* — one per user, shown in full only once — and it authenticates every command, uploads included. You never pass an application token; the server resolves the app from `--slug` + `--mode`.
 
 Two consequences that shape every CI recipe: a CLI token carries the user's **own** dashboard role (it is not a service account, so a pipeline built on it breaks when that person rotates their token or leaves), and **uploads need `settings.mapping_files.modify`** on top of app access — a token that queries fine can still be refused for uploads.
@@ -105,6 +107,8 @@ Step 5 above is a **hard gate on this step**: a committed pipeline step that has
 
 Platform-specific pipeline snippets (GitHub Actions, Fastlane, Gradle, Bitrise, CircleCI, an Xcode build phase, cron) are in `references/ci-recipes.md`.
 
+**Xcode build phase: use `scripts/add_dsym_upload_phase.rb`, never a hand-written phase.** With `ENABLE_USER_SCRIPT_SANDBOXING = YES` (the default since Xcode 15) a phase that zips the dSYM folder is blocked by the sandbox and fails every Release build and archive, while Debug builds stay green. The script declares the exact inputs and output the sandbox needs. After adding it, prove it with a **Release** build passing `LUCIQ_SKIP_UPLOAD=YES` (runs everything the sandbox can block, sends nothing) — a Debug build skips the phase and proves nothing.
+
 **Rate limit applies to uploads too.** The gateway allows 100 requests per 60 seconds keyed by source IP, and that budget covers *every* command. A matrix build pushing symbols for several platforms and ABIs at once draws on the same allowance as a shared CI runner's other traffic. Treat `429` as back-off-and-retry, not as failure.
 
 ## When a crash is still unreadable after an upload
@@ -137,7 +141,8 @@ Work down this list; the answer is nearly always #1 or #4. Full triage detail, p
 | --- | --- |
 | `references/upload-matrix.md` | per-platform upload subcommands, artifact locations, required flags, file-format traps |
 | `references/ci-recipes.md` | GitHub Actions, Fastlane, Gradle, Bitrise, CircleCI, Xcode build phase, cron |
-| `references/troubleshooting.md` | error → cause → fix, upload permissions, unsymbolicated-crash triage |
+| `references/troubleshooting.md` | error → cause → fix, Xcode build-phase sandbox errors, upload permissions, unsymbolicated-crash triage |
+| `scripts/add_dsym_upload_phase.rb` | adds a sandbox-safe *Upload dSYMs to Luciq* Run Script phase to an `.xcodeproj` target |
 
 ## Style
 

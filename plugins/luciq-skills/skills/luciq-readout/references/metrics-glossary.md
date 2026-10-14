@@ -92,7 +92,7 @@ What the numbers mean:
 | `number` | The crash group's integer ID. Feeds `crash_patterns` and `crash_details`. |
 | `occurrences_counter` | Total occurrences of this group in scope — **volume**. |
 | `affected_users_counter` | Distinct users hit — **blast radius**. Lead with this for impact. |
-| `crash_type` | `CRASH`, `NON_FATAL`, `OOM` (iOS), `ANR` (Android). |
+| `crash_type` | `CRASH`, `NON_FATAL`, `OOM` (iOS), `ANR` (Android). Force restarts read `USER_TERMINATION` (iOS) or `ANDROID_USER_TERMINATION`, and appear only when `filters.type` includes `FORCE_RESTART`. |
 | `current_view` | Screen where it occurred (e.g. `Pay.PaymentViewController`). Powers the `current_views` filter. |
 | `team` | JSON `{name, id}` of the owning team — the EM / VP "who owns this." |
 | `status_id` | `1` open, `2` closed, `3` in progress. |

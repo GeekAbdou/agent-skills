@@ -38,7 +38,7 @@ Verify product names, SDK class names, and dashboard surface labels against http
   - **Proactive Bug Reporting** — propose when a post-action moment exists in code (post-purchase, post-onboarding-complete). Single API call at that site.
 - **Per-view privacy markers** on individual PII-bound views. Consume the `sensitive_views` list from the profile (built in Phase 1 Track B) and propose the platform-appropriate marker for each entry — see the platform marker table in `SKILL.md` Phase 1 Track B for the canonical syntax per platform.
   Follow the confirmation policy in SKILL.md Track B: confirm the first 3–5 views individually so the user sees the pattern, then batch-confirm the rest with a single question. Drop back to per-match if the user inspects a specific row. Reject-once-and-continue on false positives within both modes.
-- Coarse screen-level fallback: if `sensitive_views` is empty or shallow (e.g. heavily generated UI), default the money path and auth screens to use the wrapper variant (`LuciqPrivateView { ... }` on iOS, `LuciqPrivateView(child: ...)` on Flutter / RN) at the screen root so the screen is masked even before per-view enumeration catches up.
+- Coarse screen-level fallback: if `sensitive_views` is empty or shallow (e.g. heavily generated UI), default the money path and auth screens to use the wrapper variant (`LuciqPrivateView { ... }` on iOS, `LuciqPrivateView(child: ...)` on Flutter; React Native has no wrapper, so `Luciq.addPrivateView(ref)` on the root view) at the screen root so the screen is masked even before per-view enumeration catches up.
 
 **Style match.**
 - If Sentry / Bugsnag / etc. has `attachScreenshot: false` → recommend Luciq screenshot capture off as default.
@@ -340,8 +340,10 @@ Verify product names, SDK class names, and dashboard surface labels against http
 - APM not being adopted this session → defer with revisit condition *"when you adopt APM."*
 
 **Apply targets.**
-- `Luciq.startFlow(name)` at the journey entry point (e.g. cart view appearance).
-- `Luciq.endFlow(name)` at the success terminus (e.g. confirmation view appearance), and at known abandonment points if any.
+- The APM module's `startFlow(name)` at the journey entry point (e.g. cart view appearance) — `APM.startFlow(name)` on Android, Flutter and React Native; `APM.startFlow(withName:)` on iOS. Flows live on the APM module, not on `Luciq`.
+- The APM module's `endFlow(name)` at the success terminus only (e.g. confirmation view appearance) — `APM.endFlow(name)` on Android, Flutter and React Native; `APM.endFlow(withName:)` on iOS. It takes no outcome and counts as a completion: never call it on cancel, back-out or error paths, or drop-offs are logged as successes. It can't end a flow while the app is in the background.
+- Don't instrument drop-offs — Luciq records them itself: crash, forced restart (app reopened within 5 seconds), abandonment (app in background over 60 seconds), or a new `startFlow` with the same name.
+- Optionally `APM.setFlowAttribute(name, key, value)` (`APM.setAttributeForFlowWithName(_:key:value:)` on iOS) while the flow is running, to record the stage the user reached (e.g. `step` → `payment`; the same key overwrites). Attributes can't be added or changed after `endFlow`. Keep values bucketed — key ≤ 30 chars, value ≤ 60 chars, up to 5 attributes per flow instance.
 - Flow names follow the user's existing screen-naming convention (don't invent new vocabulary — match what their navigation already calls these screens).
 - One flow at a time per name — verify no parallel `startFlow` with the same name is possible in the proposed instrumentation.
 
@@ -354,6 +356,7 @@ Verify product names, SDK class names, and dashboard surface labels against http
 **Verification.**
 - Run the instrumented flow end-to-end in the app (e.g. complete a test checkout).
 - The flow should appear on the Flows surface within ~1 minute with one completion logged.
+- Back out of the flow midway once — that run must not log a completion. If it does, `endFlow` is wired to an exit path.
 
 **Hard prereq.**
 - SDK v13.0.0 or later. If the user is on an older SDK, defer with revisit condition *"after upgrading to SDK v13+."*

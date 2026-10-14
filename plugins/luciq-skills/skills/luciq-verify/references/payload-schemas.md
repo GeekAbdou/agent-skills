@@ -141,6 +141,7 @@ This means APM is **N/A for Flutter (DART) and React Native (JAVASCRIPT) project
 - iOS: `CRASH`, `OOM`, `NON_FATAL`.
 - RN / Flutter: `CRASH`, `ANR`, `OOM`, `NON_FATAL`.
 - Every platform: `APP_HANG` (app hangs).
+- Every platform: `FORCE_RESTART` (force restarts). They are left out unless this value is in the list, and the plan must include force restarts.
 
 iOS UI hangs surface only with `APP_HANG` in `filters.type` (rows read `crash_type: FATAL_UI_HANG`); without a `type` filter they are left out.
 

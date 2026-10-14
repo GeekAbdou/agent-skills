@@ -26,6 +26,8 @@ YOU MUST verify SDK API signatures, package names, and MCP transport URLs agains
 | iOS install + init | https://docs.luciq.ai/ios/setup-luciq-for-ios/integrate-luciq-on-ios/luciq-ai-ios-guide |
 | Android install + init | https://docs.luciq.ai/android/set-up-luciq-for-android/integrate-luciq-on-android/luciq-ai-android-guide |
 | Flutter install + init | https://docs.luciq.ai/flutter/setup-luciq-for-flutter/integrating-luciq |
+| Flutter crash hooks | https://docs.luciq.ai/flutter/setup-luciq-for-flutter/setup-crash-reporting/reporting-crashes |
+| Flutter `LuciqWidget`, repro steps, private views | https://docs.luciq.ai/flutter/setup-luciq-for-flutter/logs-and-profiling/auto-masking-and-repro-steps |
 | React Native install + init | https://docs.luciq.ai/react-native/setup-luciq-for-react-native/integrate-luciq-on-react-native |
 | KMP install + init | https://docs.luciq.ai/kmp/setup-luciq-for-kmp/integrating-luciq |
 | MCP server config | https://docs.luciq.ai/product-guides-and-integrations/product-guides/ai-features/luciq-mcp-server/setup-by-ide |
@@ -46,6 +48,17 @@ The live guides are the source of truth for *what* to do, but a guide snippet ca
 `grep -r "<methodName>"` there. No hit means the name is wrong: search the guide page for the real one, don't guess a variant. On iOS, headers use Objective-C names — `LCQNetworkLogger` is `NetworkLogger` in Swift, `setRequestObfuscationHandler:` is `setRequestObfuscationHandler(_:)`.
 
 If a guide snippet is not valid code in the target language (prose inside a code block, unfilled placeholders), treat it as prose. Do not fill in the gaps and ship the rest verbatim.
+
+### Where the AI guides contradict this skill
+
+The AI guides are agent workflows of their own, and in places they give the opposite instruction (checked on the Android guide). Take API names, coordinates and signatures from the guide; take the workflow from this skill. On a conflict, this skill wins:
+
+| The AI guide says | Do instead |
+| --- | --- |
+| Put the app token in the init call (and, on Android, in `build.gradle`) | Inject it at build time — step 2 |
+| List every app from MCP as a numbered list | Past 10 apps, ask for the name or token — step 2 |
+| A network masking handler is mandatory, `Authorization` and `token` included | Rely on the SDK default; add a handler only for keys it misses — step 5 |
+| Upload mapping files with an app-token script run by a Gradle task over `android.applicationVariants` (removed in AGP 9) | Hand off to `luciq-symbolicate` — step 8 |
 
 ## Workflow checklist
 
@@ -98,6 +111,18 @@ Resolve the token in this order:
 NEVER commit the token inline. Use a build-time injection, an env var, or a gitignored secrets file. Tokens leak via git history, which is irreversible.
 
 - **iOS:** run `scripts/add_token_config.rb` — gitignored `.xcconfig` → `$(LUCIQ_APP_TOKEN)` in a real `Info.plist` → `Bundle.main`. See `references/ios-token-injection.md`. Do NOT use `INFOPLIST_KEY_<CustomKey>`: Xcode silently drops custom keys, the build stays green, and the token is empty at runtime.
+- **Android:** `LUCIQ_APP_TOKEN=…` in `local.properties` (gitignored in the Android Studio template — confirm it), or the env var in CI → a `BuildConfig` field → `Luciq.Builder(this, BuildConfig.LUCIQ_APP_TOKEN)`. Verified on AGP 9.0 with the configuration cache:
+  ```kotlin
+  import java.util.Properties   // top of app/build.gradle.kts
+
+  val luciqAppToken = providers.environmentVariable("LUCIQ_APP_TOKEN").orNull
+      ?: Properties().apply { rootProject.file("local.properties").takeIf { it.exists() }?.reader()?.use { load(it) } }
+          .getProperty("LUCIQ_APP_TOKEN", "")
+  android {
+      buildFeatures { buildConfig = true }
+      defaultConfig { buildConfigField("String", "LUCIQ_APP_TOKEN", "\"$luciqAppToken\"") }
+  }
+  ```
 
 ## 3. Per-platform recipe
 
@@ -171,18 +196,33 @@ Read `references/ios-spm.md` first. **Do not hand-edit `project.pbxproj`** — h
 
 ### Android
 
-Verify exact dependency coordinates, version, and init signature against the live guide before applying — these change across releases.
+Verify exact dependency coordinates, version, and init signature against the live guide before applying — these change across releases. Latest version: `<release>` in https://repo1.maven.org/maven2/ai/luciq/library/luciq/maven-metadata.xml — use it for every `ai.luciq.library` artifact and the plugin. Snippets below are verified against SDK and plugin 19.12.1 on AGP 9.0.
 
 1. **Check compile SDK version**: must be ≥ 29. Raise `compileSdkVersion` in `app/build.gradle(.kts)` if needed.
-2. **Add the dependency** in `app/build.gradle(.kts)` (verify groupId, artifactId, and latest version on the live guide):
-   - Gradle: `implementation 'ai.luciq.library:luciq:<version>'`
-   - Maven projects: use the same groupId/artifactId coordinates from the live guide.
-3. **Verify dependency resolution** after user confirmation: `./gradlew :app:dependencies` — this triggers Gradle to fetch the new dependency without needing Android Studio. Fix any resolution errors before continuing.
-4. **Initialize in the Application subclass** `onCreate` using the Builder pattern (verify exact API on the live guide):
-   - Kotlin: `Luciq.Builder(this, "APP_TOKEN").build()`
-   - Java: `new Luciq.Builder(this, "APP_TOKEN").build();`
-5. **Permissions**: the SDK automatically injects `WAKE_LOCK` and `INTERNET` into `AndroidManifest.xml` — no manual edits needed. Optional permissions for image/video attachments and network monitoring are listed in the live guide.
-6. **Android 15+ (API 35)**: if `targetSdkVersion` is 35 or higher, the live guide requires Luciq ≥ 13.4.0 for 16 KB page-size support. Verify the minimum compatible version on the live guide and pin accordingly.
+2. **Add the dependencies** in `app/build.gradle(.kts)`:
+   - `implementation("ai.luciq.library:luciq:<version>")` — it already brings `luciq-apm` and `luciq-apm-okhttp-interceptor`.
+   - `implementation("ai.luciq.library:luciq-with-okhttp-interceptor:<version>")` — the AI guide omits it. The plugin (step 3) rewires every `OkHttpClient` the app builds, directly or through Retrofit, Coil, Apollo…, to a class in this artifact. Without it the debug build is green and the release build fails in R8: `Missing class ai.luciq.library.okhttp.Transform`.
+   - Maven projects: same groupId/artifactId coordinates.
+3. **Apply the Gradle plugin and turn on network capture** — `networkInterception` defaults to off, and without it no request is captured automatically:
+   ```kotlin
+   // root build.gradle.kts (Groovy: buildscript { dependencies { classpath "ai.luciq.library:luciq-plugin:<version>" } })
+   plugins { id("ai.luciq.library") version "<version>" apply false }
+
+   // app/build.gradle.kts, after id("com.android.application")
+   plugins { id("luciq") }
+   luciq { networkInterception { enabled = true } }
+   ```
+   Two AI-guide lines fail script compilation in a `.kts` file: `okHttp { config -> config.enabled = … }` (nested blocks take a receiver: `okHttp { enabled = true }`) and `apm { captureHttpBodyEnabled = … }` (no such property).
+4. **Verify dependency resolution** after user confirmation: `./gradlew :app:dependencies` — this triggers Gradle to fetch the new dependency without needing Android Studio. Fix any resolution errors before continuing.
+5. **Initialize in the Application subclass** as the first statement after `super.onCreate()`. No `Application` subclass yet: create one and set `android:name` on `<application>` in the manifest. Token from step 2:
+   - Kotlin: `Luciq.Builder(this, BuildConfig.LUCIQ_APP_TOKEN).setInvocationEvents(LuciqInvocationEvent.SHAKE, LuciqInvocationEvent.FLOATING_BUTTON).build()`
+   - Java: `new Luciq.Builder(this, BuildConfig.LUCIQ_APP_TOKEN).setInvocationEvents(LuciqInvocationEvent.SHAKE, LuciqInvocationEvent.FLOATING_BUTTON).build();`
+6. **Permissions**: the SDK automatically injects `WAKE_LOCK` and `INTERNET` into `AndroidManifest.xml` — no manual edits needed. Optional permissions for image/video attachments and network monitoring are listed in the live guide.
+7. **Android 15+ (API 35)**: if `targetSdkVersion` is 35 or higher, the live guide requires Luciq ≥ 13.4.0 for 16 KB page-size support. Verify the minimum compatible version on the live guide and pin accordingly.
+8. **Jetpack Compose** (`androidx.compose` in the dependencies): add `ai.luciq.library:luciq-compose:<version>` (or `luciq-compose-apm`, which also measures Compose screen loading). It provides `LuciqScreen` and the `Modifier.luciqPrivate()` that step 5 masks with. On Navigation 2, `luciq { setCaptureComposeNavigationDestinations(true) }` names screens with no code change. This is the "Step 1D (Compose detection)" the AI guide points to but never shows.
+9. **NDK** (`externalNativeBuild`, `src/main/cpp`, or `.so` files in `jniLibs`): add `ai.luciq.library:luciq-ndk-crash:<version>` and call `CrashReporting.setNDKCrashesState(Feature.State.ENABLED)` after init — native crash capture is off by default. Native symbols are `luciq-symbolicate`'s `android-ndk` upload (step 8).
+10. **AGP 9 only:** `processDebugMainManifest` fails with `Namespace 'androidx.vectordrawable' is used in multiple modules` when the app has no newer appcompat (Android Studio's Compose template has none): `luciq-core` pulls `material:1.0.0` → `appcompat:1.0.0`, and AGP 9 turns the duplicate namespace into an error. Fix: `implementation("androidx.vectordrawable:vectordrawable-animated:1.2.0")`.
+11. **With `isMinifyEnabled = true`, also run `./gradlew :app:assembleRelease`** next to the step 9 debug build. R8 is the only step that catches a missing Luciq artifact.
 
 ### Flutter
 
@@ -192,18 +232,37 @@ Verify exact dependency coordinates, version, and init signature against the liv
      luciq_flutter:
    ```
 2. **Fetch the package**: `flutter packages get`
-3. **Import** in the file where you initialize: `import 'package:luciq_flutter/luciq_flutter.dart';`
-4. **Initialize** in `initState()` (verify the exact API signature on the live guide):
+3. **Raise the iOS deployment target** before `pod install` (or the first iOS build): the `luciq_flutter` podspec sets `s.ios.deployment_target = '15.4'` (19.9.4 — check `~/.pub-cache/hosted/pub.dev/luciq_flutter-*/ios/luciq_flutter.podspec` for the installed version), while a default Flutter project targets iOS 12.0. Set `platform :ios, '15.4'` in `ios/Podfile` and `IPHONEOS_DEPLOYMENT_TARGET = 15.4` on the Runner target. Otherwise `pod install` fails with only CocoaPods' generic "required a higher minimum deployment target" error.
+4. **Import** in `lib/main.dart`: `import 'dart:async';` (for `runZonedGuarded` / `Zone`) and `import 'package:luciq_flutter/luciq_flutter.dart';`
+5. **Initialize in `main()`, with crash hooks and `LuciqWidget`** — not in `initState()` as the integration guide shows. Without the hooks, Dart errors are never reported; without `LuciqWidget`, user steps and masking of Flutter widgets (`LuciqPrivateView`, auto-masking) silently do nothing. Pattern from the SDK's own example (`luciq-flutter-sdk` v19.9.4, `packages/luciq_flutter/example/lib/main.dart`); verify on the live *Reporting Crashes* and *Auto-masking & Repro Steps* pages (Canonical sources):
    ```dart
-   Luciq.init(
-     token: 'APP_TOKEN',
-     invocationEvents: [InvocationEvent.shake, InvocationEvent.floatingButton],
-   );
+   void main() {
+     runZonedGuarded(
+       () {
+         WidgetsFlutterBinding.ensureInitialized();
+         Luciq.init(
+           token: 'APP_TOKEN',
+           invocationEvents: [InvocationEvent.shake, InvocationEvent.floatingButton],
+         );
+         FlutterError.onError = (FlutterErrorDetails details) {
+           Zone.current.handleUncaughtError(details.exception, details.stack!);
+         };
+         runApp(LuciqWidget(child: const MyApp())); // MyApp = the existing root widget
+       },
+       CrashReporting.reportCrash,
+     );
+   }
    ```
-5. **iOS permissions** — add to `Info.plist` (required for media attachments):
+   Keep any existing `main()` setup (Firebase, DI) inside the zone callback. If another crash reporter already sets `FlutterError.onError` or uses `runZonedGuarded`, chain to its handler instead of replacing it.
+6. **Screen names for repro steps** — add `LuciqNavigatorObserver()` to `navigatorObservers` on `MaterialApp` / `CupertinoApp`. `MaterialApp.router` has no `navigatorObservers`; register it on the router instead (go_router: `GoRouter(observers: [LuciqNavigatorObserver()])`).
+7. **Network logging (optional — not automatic in Flutter)**: check `pubspec.yaml` for the HTTP client and offer the matching add-on (versions as of `luciq-flutter-sdk` v19.9.4, all require `luciq_flutter` 19.x — verify on pub.dev):
+   - `dio` → `luciq_dio_interceptor` (3.1.1): `dio.interceptors.add(LuciqDioInterceptor());`
+   - `http` → `luciq_http_client` (3.1.0): send requests through `LuciqHttpClient()` instead of `http.Client()` — top-level `http.get()` calls bypass it.
+   - `gql_link` clients (`graphql_flutter`, `ferry`) → `luciq_gql_link` (1.0.0): `Link.from([LuciqGqlLink(endpoint: url), HttpLink(url)])` — it must come before the terminating link.
+8. **iOS permissions** — add to `Info.plist` (required for media attachments):
    - `NSMicrophoneUsageDescription`
    - `NSPhotoLibraryUsageDescription`
-6. **Android permissions**: auto-injected into `AndroidManifest.xml` — no manual edits needed. Exception: if you enable screenshot invocation, the SDK requests storage permission at app launch (it monitors the screenshots directory).
+9. **Android permissions**: auto-injected into `AndroidManifest.xml` — no manual edits needed. Exception: if you enable screenshot invocation, the SDK requests storage permission at app launch (it monitors the screenshots directory).
 
 ### React Native
 
@@ -235,11 +294,11 @@ Verify dependency coordinates, version, and init signatures against the live gui
    ```kotlin
    sourceSets {
        commonMain.dependencies {
-           api("ai.luciq-library:luciq-kmp:<version>")
+           api("ai.luciq.library:luciq-kmp:<version>")
        }
    }
    ```
-   iOS also requires a separate native LuciqKMP dependency — check the live guide for the exact artifact.
+   The group is `ai.luciq.library` — the KMP guide's code block has `ai.luciq-library`, which does not exist on Maven Central. iOS also requires a separate native LuciqKMP dependency — check the live guide for the exact artifact.
 
 2. **Create a shared config object** in `commonMain` (verify the exact class names and fields on the live guide):
    ```kotlin
@@ -296,8 +355,10 @@ Goal: identify likely-sensitive UI views and configure SDK-side masking. A naive
 1. Grep the platform's UI source files only (`*.swift`, `*.kt`, `*.dart`, `*.tsx`, `*.jsx`) for these identifier-shaped strings: `password`, `email`, `cardNumber`, `ssn`, `cvv`, `pin`, `dob`, `iban`.
 2. Filter out matches in `*test*`, `*spec*`, `*mock*`, `*fixture*` paths, validator/regex utilities, and anything under `node_modules`, `Pods/`, or `build/`.
 3. Show the filtered match list with `file:line` for each. Get per-match confirmation. Do not apply masking rules in bulk.
-4. Verify the masking API signature for the detected platform on the live guide. The masking API has differed across platforms and changed across SDK versions; do not hardcode it.
+4. Verify the masking API signature for the detected platform on the live guide. The masking API has differed across platforms and changed across SDK versions; do not hardcode it. The Flutter docs pages contradict each other (`AutoMasking` names, how to turn it off); per-platform calls checked against SDK source are in `luciq-masking-rules/references/auto-mask-types.md`.
 5. Apply masking config only for confirmed matches.
+
+**Flutter:** `LuciqPrivateView` (`LuciqSliverPrivateView` inside slivers) and `AutoMasking` mask Flutter widgets only under the `LuciqWidget` from the Flutter recipe. Without it they mask nothing and raise no error — confirm it wraps the root before applying.
 
 **Network logs — rely on the default first.** From SDK 14.2.0 the SDK masks a known set of sensitive header and query keys (auth, token, password, api key, secret variants) on the device, before anything is sent. Confirm the installed version is ≥ 14.2.0 (`Package.resolved`, `Podfile.lock`, `build.gradle`, `pubspec.lock`, `package.json`) and do not write a custom handler for keys the default already covers. The full default list is in `luciq-masking-rules/references/network-masking.md`.
 
@@ -313,7 +374,23 @@ NetworkLogger.setRequestObfuscationHandler { request in
 }
 ```
 
-Response bodies use `NetworkLogger.setResponseObfuscationHandler`. For other platforms, find the equivalent on the live guide and check the name as described in *Check symbols against the SDK*. Anything deeper — omitting whole endpoints, compliance presets — belongs to `luciq-masking-rules`; mention it in the hand-off rather than doing it here.
+Response bodies use `NetworkLogger.setResponseObfuscationHandler`.
+
+Android, verified against SDK 19.12.1. The headers are nullable `MutableMap`s and the body field is `response`, not `responseBody`, so the AI Android guide's snippet does not compile:
+
+```kotlin
+val masked = setOf("cookie", "x-api-key")
+Luciq.setNetworkLogListener { log ->
+    log.requestHeaders?.let { headers ->
+        for (key in headers.keys.toList()) if (key.lowercase() in masked) headers[key] = "*****"
+    }
+    log  // return null to drop the log entirely
+}
+```
+
+Android auto-mask types: `Luciq.setAutoMaskScreenshotsTypes(...)` replaces the default set, which is `MaskingType.WEB_VIEWS` alone. The AI guide's default `TEXT_INPUTS, LABELS, MEDIA` therefore unmasks WebViews — keep `MaskingType.WEB_VIEWS` in any call.
+
+For other platforms, find the equivalent on the live guide and check the name as described in *Check symbols against the SDK*. Anything deeper — omitting whole endpoints, compliance presets — belongs to `luciq-masking-rules`; mention it in the hand-off rather than doing it here.
 
 **App Store privacy (iOS, and the iOS side of Flutter / React Native / KMP).** Every feature turned on above changes what the app must declare on its App Store privacy card, and Apple rejects mismatches. Read `references/ios-privacy.md`, then:
 
@@ -376,6 +453,8 @@ Deriving `<Workspace>` and `<Scheme>` for iOS and RN-iOS:
 - `<Scheme>`: derive by running `xcodebuild -list -project <Name>.xcodeproj` (or `-workspace` if applicable) and picking the app scheme. Usually matches the project name. For RN, the scheme typically matches the app's display name in `app.json`.
 - If multiple workspaces or schemes exist, STOP and ask the user which to build. Do not guess.
 
+**iOS with a symbol-upload build phase from step 8:** also run a Release build — the same command with `-configuration Release LUCIQ_SKIP_UPLOAD=YES` (the flag runs the phase up to the upload and sends nothing). The phase skips Debug builds, so the Debug build above never runs it. A phase that Xcode's script sandbox blocks (`Sandbox: … deny(1) file-read-data`) fails only on Release and archive, which is where the user would otherwise find it. On that error, go back to `luciq-symbolicate` and replace the phase with its `scripts/add_dsym_upload_phase.rb`; do not switch off `ENABLE_USER_SCRIPT_SANDBOXING` without asking.
+
 STOP on build failure. NEVER claim success on a broken build.
 
 ## 10. Hand off
@@ -383,6 +462,7 @@ STOP on build failure. NEVER claim success on a broken build.
 Print:
 - File where init was added.
 - Invocation event configured.
+- Flutter: the network-logging add-on installed, or *"none — network requests won't appear in reports"*.
 - Masking rules applied (with file:line for each).
 - User identification call sites.
 - MCP / CLI wired status.
@@ -399,7 +479,8 @@ Setup ends at a green build. **Do not launch the app, trigger crashes, or inspec
 > 1. **Bug reporting:** run the app, tap the Luciq floating button (or shake — in the iOS Simulator: *Device → Shake*, Ctrl+Cmd+Z), and send a report that says "test report".
 > 2. **Crash reporting:**
 >    - **Stop the debugger first.** With Xcode (or Android Studio) attached, the debugger catches the crash and the app just freezes — no report is written. On iOS, launch the app from the simulator's home screen, or uncheck *Edit Scheme → Run → Debug executable*.
->    - Crash the app. If there's no easy way, add a temporary button that calls `fatalError("Luciq test crash")` (Kotlin: `throw RuntimeException("Luciq test crash")`) and remove it afterwards.
+>    - **Flutter: use a release build** (`flutter run --release`). Dart errors are sent only in release mode; debug and profile builds just print them to the console.
+>    - Crash the app. If there's no easy way, add a temporary button that calls `fatalError("Luciq test crash")` (Kotlin: `throw RuntimeException("Luciq test crash")`, Dart: `throw Exception('Luciq test crash')`) and remove it afterwards.
 >    - **Open the app again.** Crash reports are sent on the next launch, not at the moment of the crash.
 > 3. Open the Luciq dashboard for this app. The report and the crash should be there within a minute or two.
 >
@@ -421,6 +502,7 @@ If you catch yourself thinking any of these, you are about to ship a broken inte
 - "I skipped checking the live guide because the docs probably haven't changed." That's how you ship a stale signature. Always verify.
 - "I hardcoded the init signature from this file, it looked right." This file is illustrative, not authoritative. The live guide is the source of truth.
 - "The guide shows this method, so it exists." Check it against the installed SDK first. A guide snippet that isn't valid code is prose — don't fill in its gaps.
+- "Flutter `Luciq.init` is in `initState()` like the guide shows, so it's done." Dart errors reach Luciq only through `runZonedGuarded(…, CrashReporting.reportCrash)` + `FlutterError.onError`, and masking and user steps need `LuciqWidget` at the root.
 - "I'll write a network obfuscation handler to be safe." Not for keys the default auto-masking already covers. Extra handlers are extra code to get wrong.
 - "I committed the app token inline because it's just for local testing." Tokens leak via git history. Use env injection or a gitignored secrets file.
 - "I'll show all the apps from `list_applications` and let them pick." Not past 10 — ask for the name or token and filter.
@@ -431,6 +513,7 @@ If you catch yourself thinking any of these, you are about to ship a broken inte
 - "Shake is enough, no need for a button." Keep one visible entry point at least in debug builds — otherwise the first tester reports the SDK as broken.
 - "I'll run the app and crash it to prove the setup works." Don't. Stop at the green build and hand the user the *Test it yourself* checklist.
 - "The docs say to download the upload script from the dashboard, so I'll leave symbols for later." Hand off to `luciq-symbolicate` — it has a scriptable path, no dashboard download needed.
+- "The Debug build is green, so the dSYM upload phase works." The phase skips Debug. Run a Release build before calling setup done — that is where the script sandbox blocks a hand-written phase.
 - "Two platform markers matched but I picked the obvious one." If the workspace is ambiguous, ask. Cross-platform projects break this assumption routinely.
 - "I'll just hand-edit `project.pbxproj`, it's only a few entries." Use `scripts/add_spm_package.rb`. If it can't run, ask the user to add the package in Xcode — don't improvise object IDs.
 - "Xcode is open but the edit is small." Ask the user to quit Xcode first. An edit under an open Xcode is what produces `Missing package product`.

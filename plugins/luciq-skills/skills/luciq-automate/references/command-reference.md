@@ -46,7 +46,7 @@ luciq apps list --limit 50 | jq -r '.applications[] | "\(.slug)\t\(.mode)\t\(.pl
 
 | Subcommand | Flags |
 | --- | --- |
-| `list` | `--status open\|closed\|in_progress`, `--platform IOS\|ANDROID\|DART\|JAVASCRIPT`, `--type CRASH\|ANR\|OOM\|NON_FATAL\|APP_HANG`, `--app-version`, page, sort |
+| `list` | `--status open\|closed\|in_progress`, `--platform IOS\|ANDROID\|DART\|JAVASCRIPT`, `--type CRASH\|ANR\|OOM\|NON_FATAL\|APP_HANG\|FORCE_RESTART`, `--app-version`, page, sort |
 | `show` | `--number N` (required) |
 | `patterns` | `--number N` (required), `--pattern-key app_versions\|devices\|oses\|current_views\|app_status\|experiments`, `--sort-by occurrences_count\|last_seen\|first_seen`, `--direction` |
 | `diagnostics` | `--number N` (required) |
@@ -54,6 +54,8 @@ luciq apps list --limit 50 | jq -r '.applications[] | "\(.slug)\t\(.mode)\t\(.pl
 | `occurrence` | `--number N`, `--ulid U` (both required) |
 
 Sort fields for `list`: `last_occurred_at`, `first_occurred_at`, `occurrences_counter`, `affected_users_counter`, `max_app_version`, `min_app_version`, `severity`.
+
+Force restarts are listed only when the type list includes `FORCE_RESTART`, and only on plans that include force restarts. `--type APP_HANG` and `--type FORCE_RESTART` need a luciq-cli release after 0.3.0. On 0.3.0, pass them through `--filters '{"type":["APP_HANG"]}'`, because `--filters` does not check the values.
 
 `--filters` keys — `list`:
 
@@ -66,7 +68,7 @@ devices        ["iPhone15,2"]
 os_versions    ["17.4"]
 platform       ["IOS","ANDROID","DART","JAVASCRIPT"]
 current_views  ["<screen-name>"]
-type           ["CRASH","ANR","OOM","NON_FATAL","APP_HANG"]
+type           ["CRASH","ANR","OOM","NON_FATAL","APP_HANG","FORCE_RESTART"]
 subtype        ["CRITICAL","ERROR","WARNING","INFO"]    (needs NON_FATAL in type)
 feature_flags  ["<flag>" | "<flag> -> <variant>"]
 ```
