@@ -30,7 +30,7 @@ The MCP exposes (verbatim names):
 | `crash_patterns` | Distribution by `pattern_key` (e.g. `oses`, `app_versions`, `devices`). |
 | `list_occurrences_tokens` | Occurrence ULIDs for a crash group, paginated. |
 | `get_occurrence_details` | Per-occurrence detail: session profiler, logs URLs, device state. |
-| `list_crashes` with `filters.type: ["APP_HANG"]` | App hang groups. iOS surface as `FATAL_UI_HANG`, Android as `ANDROID_FATAL_HANG`. ANRs are the separate `ANR` type; add it to the same call to get both. |
+| `list_crashes` with `filters.type: ["APP_HANG"]` | App hang groups. iOS surface as `FATAL_UI_HANG`, Android as `ANDROID_FATAL_HANG`. ANRs are the separate `ANR` type; list them in their own call, because a plan without app hangs rejects any call that includes `APP_HANG`, ANRs included. |
 | `list_bugs` | User-reported bugs. |
 | `bug_details` | Full bug detail including compressed log archive URLs. |
 | `list_reviews` | App Store / Play Store reviews filtered by `rating` and `app_version`. |
@@ -66,7 +66,7 @@ Determine the kind of signal being debugged. If the user has not specified, ask.
 | --- | --- | --- |
 | Crash group | Crash number, fingerprint, or pasted stack trace | `crash_details` (or `list_crashes` to find it first) |
 | Specific occurrence of a crash | Crash number plus ULID | `get_occurrence_details` |
-| App hang or ANR | Hang number, or "recent UI hangs" | `list_crashes` with `filters.type: ["APP_HANG", "ANR"]` (then the crash tools on its number) |
+| App hang or ANR | Hang number, or "recent UI hangs" | `list_crashes` with `filters.type: ["ANR"]`, and separately with `["APP_HANG"]` (then the crash tools on its number). If the hang call returns a plan error, report it and keep the ANR results |
 | Force restart (the user killed the running app) | Force restart number, or "why are users force quitting" | `list_crashes` with `filters.type: ["FORCE_RESTART"]`, then `crash_diagnostics` |
 | User-reported bug | Bug number | `bug_details` |
 | Regression between versions | Two version numbers | `list_crashes` filtered by version, then `crash_patterns` with `pattern_key: app_versions` |
